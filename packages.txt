@@ -1,4 +1,5 @@
 libgl1
 libgles2
+libegl1
 libsm6
 libxext6
