@@ -1,3 +1,12 @@
+"""
+app.py — BISINDO Sign Language Translation Demo
+================================================
+Run with:  streamlit run app.py
+
+UI: full redesign per spec.
+Inference: UNCHANGED — same predict_video_with_confidence call, same args.
+"""
+
 import os
 import sys
 import tempfile
@@ -249,34 +258,72 @@ def bar_color(c: float) -> str:
 
 
 def draw_landmark_overlay(frame_bgr: np.ndarray) -> np.ndarray:
-    """Draw pose + hand landmarks on a BGR frame for display only."""
+    """Draw pose + hand landmarks on a BGR frame for display only.
+
+    Uses the MediaPipe Tasks API (mediapipe >= 0.10).
+    mp.solutions was removed in newer releases, so we use the same Tasks API
+    that preprocessing.py already uses, and draw connections manually with cv2.
+    """
     import mediapipe as mp
-    mp_draw  = mp.solutions.drawing_utils
-    mp_pose  = mp.solutions.pose
-    mp_hands = mp.solutions.hands
+    from mediapipe.tasks import python as mp_python
+    from mediapipe.tasks.python import vision as mp_vision
 
-    frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-    out       = frame_bgr.copy()
+    POSE_CONNECTIONS = [
+        (0,1),(1,2),(2,3),(3,7),(0,4),(4,5),(5,6),(6,8),
+        (9,10),(11,12),(11,13),(13,15),(12,14),(14,16),
+        (11,23),(12,24),(23,24),(23,25),(24,26),(25,27),(26,28),
+        (27,29),(28,30),(29,31),(30,32),
+    ]
+    HAND_CONNECTIONS = [
+        (0,1),(1,2),(2,3),(3,4),
+        (0,5),(5,6),(6,7),(7,8),
+        (0,9),(9,10),(10,11),(11,12),
+        (0,13),(13,14),(14,15),(15,16),
+        (0,17),(17,18),(18,19),(19,20),
+    ]
 
-    with mp_pose.Pose(static_image_mode=True, min_detection_confidence=0.3) as pose:
-        res = pose.process(frame_rgb)
-        if res.pose_landmarks:
-            mp_draw.draw_landmarks(
-                out, res.pose_landmarks, mp_pose.POSE_CONNECTIONS,
-                mp_draw.DrawingSpec(color=(0, 220, 90),  thickness=2, circle_radius=3),
-                mp_draw.DrawingSpec(color=(0, 160, 60),  thickness=2),
-            )
+    h, w = frame_bgr.shape[:2]
+    out  = frame_bgr.copy()
 
-    with mp_hands.Hands(static_image_mode=True, max_num_hands=2,
-                        min_detection_confidence=0.3) as hands:
-        res = hands.process(frame_rgb)
-        if res.multi_hand_landmarks:
-            for hl in res.multi_hand_landmarks:
-                mp_draw.draw_landmarks(
-                    out, hl, mp_hands.HAND_CONNECTIONS,
-                    mp_draw.DrawingSpec(color=(255, 120, 30), thickness=2, circle_radius=3),
-                    mp_draw.DrawingSpec(color=(200,  80,  0), thickness=2),
-                )
+    # Pass BGR bytes with SRGB label — same as inference pipeline
+    image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_bgr)
+
+    # Pose
+    try:
+        pose_opts = mp_vision.PoseLandmarkerOptions(
+            base_options=mp_python.BaseOptions(model_asset_path=POSE_MODEL_PATH),
+        )
+        with mp_vision.PoseLandmarker.create_from_options(pose_opts) as detector:
+            result = detector.detect(image)
+        if result.pose_landmarks:
+            pts = [(int(lm.x * w), int(lm.y * h)) for lm in result.pose_landmarks[0]]
+            for a, b in POSE_CONNECTIONS:
+                if a < len(pts) and b < len(pts):
+                    cv2.line(out, pts[a], pts[b], (0, 200, 80), 2)
+            for pt in pts:
+                cv2.circle(out, pt, 3, (0, 230, 100), -1)
+    except Exception:
+        pass
+
+    # Hands
+    try:
+        hand_opts = mp_vision.HandLandmarkerOptions(
+            base_options=mp_python.BaseOptions(model_asset_path=HAND_MODEL_PATH),
+            num_hands=2,
+        )
+        with mp_vision.HandLandmarker.create_from_options(hand_opts) as detector:
+            result = detector.detect(image)
+        if result.hand_landmarks:
+            for hand_lms in result.hand_landmarks:
+                pts = [(int(lm.x * w), int(lm.y * h)) for lm in hand_lms]
+                for a, b in HAND_CONNECTIONS:
+                    if a < len(pts) and b < len(pts):
+                        cv2.line(out, pts[a], pts[b], (200, 80, 0), 2)
+                for pt in pts:
+                    cv2.circle(out, pt, 3, (255, 120, 30), -1)
+    except Exception:
+        pass
+
     return out
 
 
